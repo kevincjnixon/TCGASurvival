@@ -4,10 +4,15 @@
 #Begin by loading required data and functions
 message("Reading in gene-level TPM data...")
 exp<-readRDS("glTPM.RDS")
+#exp<-readRDS("batchPANCAN.RDS")
 message("Reading in survival data...")
 survival<-readRDS("survival.RDS")
 
+survival<-survival[which(rownames(survival) %in% colnames(exp)),]
 survival<-survival[match(colnames(exp), rownames(survival)),]
+all.equal(colnames(exp), rownames(survival))
+
+source("R/TCGA_Survival Functions.R")
 
 ui<-shiny::fluidPage(
   #App title
@@ -44,7 +49,7 @@ ui<-shiny::fluidPage(
       shiny::radioButtons(inputId = "conf",
                           label = "Show Confidence Intervals:",
                           choices=c("No","Yes"),
-                          selected="NO"),
+                          selected="No"),
       #Dropdown menu for selecting the primary gene
       shiny::selectInput(inputId = "x",
                          label="Select Primary Gene:",
@@ -58,7 +63,7 @@ ui<-shiny::fluidPage(
       #Radio buttons for selecting method
       shiny::radioButtons(inputId = "whichFun",
                           label="Sample Stratification Method:",
-                          choices=c("Optimized","Median"),
+                          choices=c("Optimized","Median","Quartile"),
                           selected="Optimized"),
       #Radio buttons for using gene ratio
       shiny::radioButtons(inputId="ratio",
@@ -70,6 +75,8 @@ ui<-shiny::fluidPage(
                          label="Survival type:",
                          choices=c("Overall Survival","Disease-Specific Survival","Disease-Free Interval","Progression-Free Interval"),
                          selected="Overall Survival"),
+      #Selection for which strata to plot:
+      shiny::uiOutput('stratOpt'),
       #Slider for selecting maximum time
       shiny::sliderInput(inputId = "timeLim",
                          label="Select Time Cutoff:",
@@ -111,6 +118,7 @@ server<-function(input, output){
     prim<-ifelse(input$primary=="Yes",TRUE,FALSE)
     conf<-ifelse(input$conf=="Yes",TRUE,FALSE)
     ratio<-FALSE
+    strat<-input$strat
     if(type=="NULL"){
       type<-NULL
     }
@@ -126,7 +134,11 @@ server<-function(input, output){
     if(input$ratio=="Yes"){
       ratio<-TRUE
     }
-
+    if(strat[1]=="NULL"){
+      strat<-NULL
+    }
+    #print(strat)
+    #print(class(strat))
     #retrieve the subsetted data
     newDat<-subDat(exp, survival, type, gender, race, norm, prim)
     #set up the time/groupings according to the subsetted data and inputs
@@ -157,7 +169,7 @@ server<-function(input, output){
     #Now make the figure
     if(input$whichFun=="Optimized"){
       main<-paste(main,"- Optimized Threshold")
-      return(optStrat(x=input$x, y, data=newDat$exp, time, event=group, title=main, useRatio=ratio, retPlot=T, timeLim=input$timeLim, show.conf=conf))
+      return(optStrat(x=input$x, y, data=newDat$exp, time, event=group, title=main, useRatio=ratio, plotStrat=strat, retPlot=T, timeLim=input$timeLim, show.conf=conf))
     }
     if(input$whichFun=="Median"){
       ydat<-NULL
@@ -166,7 +178,16 @@ server<-function(input, output){
         ydat<-newDat$exp[which(rownames(newDat$exp) %in% y),]
       }
       return(plotSurv(ExpStrat(x=newDat$exp[which(rownames(newDat$exp) %in% input$x),], ydat,
-                        method="median", useRatio=ratio), time, status=group, title=main, retPlot=T, timeLim=input$timeLim, show.conf=conf))
+                        method="median", useRatio=ratio), time, status=group, title=main, plotStrat=strat, retPlot=T, timeLim=input$timeLim, show.conf=conf))
+    }
+    if(input$whichFun=="Quartile"){
+      ydat<-NULL
+      main<-paste(main,"- Quartiles")
+      if(!is.null(y)){
+        ydat<-newDat$exp[which(rownames(newDat$exp) %in% y),]
+      }
+      return(plotSurv(ExpStrat(x=newDat$exp[which(rownames(newDat$exp) %in% input$x),], ydat,
+                               method="median", useQuartile=T, useRatio=ratio), time, status=group, title=main, plotStrat=strat, retPlot=T, timeLim=input$timeLim, show.conf=conf))
     }
   })
   getDat<-shiny::reactive({
@@ -238,6 +259,107 @@ server<-function(input, output){
       return(ExpStrat(x=newDat$exp[which(rownames(newDat$exp) %in% input$x),], ydat,
                                method="median", useRatio=ratio, retDat=T))
     }
+    if(input$whichFun=="Quartile"){
+      ydat<-NULL
+      main<-paste(main,"- Quartiles")
+      if(!is.null(y)){
+        ydat<-newDat$exp[which(rownames(newDat$exp) %in% y),]
+      }
+      return(ExpStrat(x=newDat$exp[which(rownames(newDat$exp) %in% input$x),], ydat,
+                      method="median", useQuartile=T, useRatio=ratio, retDat=T))
+    }
+  })
+  getStrat<-shiny::reactive({
+    type<-input$type
+    types<-"all"
+    if(type!="NULL"){
+      types<-type
+    }
+    gender<-input$gender
+    race<-input$race
+    y<-input$y
+    norm<-ifelse(input$norm=="Yes",TRUE, FALSE)
+    prim<-ifelse(input$primary=="Yes",TRUE,FALSE)
+    ratio<-FALSE
+    if(type=="NULL"){
+      type<-NULL
+    }
+    if(gender=="NULL"){
+      gender<-NULL
+    }
+    if(race=="NULL"){
+      race<-NULL
+    }
+    if(y=="NULL"){
+      y<-NULL
+    }
+    if(input$ratio=="Yes"){
+      ratio<-TRUE
+    }
+
+    #retrieve the subsetted data
+    newDat<-subDat(exp, survival, type, gender, race, norm, prim)
+    #set up the time/groupings according to the subsetted data and inputs
+    time<-newDat$survival$OS.time
+    group=newDat$survival$OS
+    if(input$time!="Overall Survival"){
+      if(input$time=="Disease-Specific Survival"){
+        time<-newDat$survival$DSS.time
+        group<-newDat$survival$DSS
+      }
+      if(input$time=="Disease-Free Interval"){
+        time<-newDat$survival$DFI.time
+        group<-newDat$survival$DFI
+      }
+      if(input$time=="Progression-Free Interval"){
+        time<-newDat$survival$PFI.time
+        group<-newDat$survival$PFI
+      }
+    }
+    main<-paste(input$time,"for",types,"samples -",input$x)
+    if(!is.null(y)){
+      if(isTRUE(ratio)){
+        main<-paste0(input$time," for ",types,"samples - log2(",input$x,"/",y,")")
+      } else{
+        main<-paste(input$time,"for",types,"samples -",input$x,"&",y)
+      }
+    }
+    #Now make the figure
+    if(input$whichFun=="Optimized"){
+      main<-paste(main,"- Optimized Threshold")
+      stratDat<-optStrat(x=input$x, y, data=newDat$exp, time, event=group, title=main, useRatio=ratio, retDat=T, timeLim=input$timeLim)$data
+      if(length(grep("category", colnames(stratDat)))==2){
+        return(unique(paste(stratDat[,grep("category",colnames(stratDat))[1]],stratDat[,grep("category",colnames(stratDat))[2]], sep=".")))
+      } else {
+        return(unique(stratDat[,grep("category", colnames(stratDat))]))
+      }
+    }
+    if(input$whichFun=="Median"){
+      ydat<-NULL
+      main<-paste(main,"- Median as Threshold")
+      if(!is.null(y)){
+        ydat<-newDat$exp[which(rownames(newDat$exp) %in% y),]
+      }
+      return(unique(ExpStrat(x=newDat$exp[which(rownames(newDat$exp) %in% input$x),], ydat,
+                             method="median", useRatio=ratio, retStrat=T)))
+    }
+    if(input$whichFun=="Quartile"){
+      ydat<-NULL
+      main<-paste(main,"- Quartiles")
+      if(!is.null(y)){
+        ydat<-newDat$exp[which(rownames(newDat$exp) %in% y),]
+      }
+      return(unique(ExpStrat(x=newDat$exp[which(rownames(newDat$exp) %in% input$x),], ydat,
+                             method="median", useQuartile=T, useRatio=ratio, retStrat=T)))
+    }
+  })
+  output$stratOpt<-shiny::renderUI({
+    opt<-getStrat()
+    shiny::selectInput(inputId = "strat",
+                       label = "Strata to plot:",
+                       choices = c("NULL",opt),
+                       multiple = TRUE,
+                       selected="NULL")
   })
   output$plot<-shiny::renderPlot({
     makePlot()

@@ -1,6 +1,18 @@
 library(survival)
 library(survminer)
 
+#exp2<-read.delim("rawData/EB++AdjustPANCAN_IlluminaHiSeq_RNASeqV2.geneExp.xena.gz")
+#exp2$gene<-getSym(exp2$sample, "vector", target="ENTREZGENE")
+#exp2<-exp2[complete.cases(exp2),]
+#exp2<-exp2[order(rowMeans(exp2[,-which(colnames(exp2) %in% c("sample","gene"))]), decreasing=F),]
+#exp2<-exp2[-which(duplicated(exp2$gene)),]
+#rownames(exp2)<-exp2$gene
+#exp2<-exp2[,-which(colnames(exp2) %in% c("sample","gene"))]
+#exp2<-exp2[,which(colnames(exp2) %in% rownames(survival))]
+#exp2<-exp2[,match(rownames(survival[which(rownames(survival) %in% colnames(exp2)),]), colnames(exp2))]
+
+#saveRDS(exp2, "batchPANCAN.RDS")
+
 
 #survival<-read.delim("rawData/Survival_SupplementalTable_S1_20171025_xena_sp")
 #rownames(survival)<-gsub("-",".",survival$sample)
@@ -49,11 +61,14 @@ rowMedians<-function(x){
   return(apply(x, 1, FUN=function(x) as.numeric(median(x, na.rm=T))))
 }
 
-plotSurv<-function(stratum, time, status, title="", timeLim=NULL, retPlot=F, show.conf=T){
+plotSurv<-function(stratum, time, status, title="", timeLim=NULL, plotStrat=NULL, retPlot=F, show.conf=T, cols=NULL, timeUnit="Days"){
   require(survminer)
   dat<-data.frame(stratum=stratum, time=time, status=status)
   if(!is.null(timeLim)){
     dat<-subset(dat, time<=timeLim)
+  }
+  if(!is.null(plotStrat)){
+    dat<-subset(dat, stratum %in% plotStrat)
   }
 
   fit<-surv_fit(Surv(time,status)~stratum, data=dat)
@@ -62,11 +77,12 @@ plotSurv<-function(stratum, time, status, title="", timeLim=NULL, retPlot=F, sho
   g<-ggsurvplot(
     fit=fit,
     risk.table=T,
-    xlab = "Days",
+    xlab = timeUnit,
     ylab="Probability",
     pval=T,
     conf.int=show.conf,
-    title=title
+    title=title,
+    palette=switch(is.null(cols)+1, BinfTools::colPal(cols), NULL)
   )
   if(isTRUE(retPlot)){
     return(g)
@@ -76,7 +92,7 @@ plotSurv<-function(stratum, time, status, title="", timeLim=NULL, retPlot=F, sho
   #return(g)
 }
 
-ExpStrat<-function(x, y=NULL, method="median", useRatio=F, retStrat=T, pc=0, retDat=F){
+ExpStrat<-function(x, y=NULL, method="median", useRatio=F, useQuartile=F, retStrat=T, pc=0, retDat=F){
   colMedian<-function(x){
     return(apply(x, 2, FUN=function(x) as.numeric(median(x, na.rm=T))))
   }
@@ -108,21 +124,33 @@ ExpStrat<-function(x, y=NULL, method="median", useRatio=F, retStrat=T, pc=0, ret
     #   x<-BinfTools:::rowGeoMean(x)
     # }
   }
-  res.dat<-cbind(res.dat, ifelse(x>threshold, "high","low"))
+  if(isTRUE(useQuartile)){
+    res.dat<-cbind(res.dat, BinfTools::quart_group(x))
+  } else {
+    res.dat<-cbind(res.dat, ifelse(x>threshold, "high","low"))
+  }
   colnames(res.dat)<-c(paste0(x.name,".expression"),paste0(x.name,".category"))
   if(is.null(y)){
     if(isTRUE(retDat)){
       return(res.dat)
     }
     if(isTRUE(retStrat)){
-      return(ifelse(x>threshold, "High","Low"))
+      if(isTRUE(useQuartile)){
+        return(BinfTools::quart_group(x))
+      } else {
+        return(ifelse(x>threshold, "High","Low"))
+      }
     } else {
       return(x)
     }
   } else {
     x.ratio<-x
     if(isFALSE(useRatio)){
-      x<-ifelse(x>threshold, "x.High","x.Low")
+      if(isTRUE(useQuartile)){
+        x<-paste("x",BinfTools::quart_group(x), sep=".")
+      } else {
+        x<-ifelse(x>threshold, "x.High","x.Low")
+      }
     }
     res.dat<-cbind(res.dat, as.numeric(y[1,]))
     y.name<-rownames(y[1,])
@@ -153,7 +181,11 @@ ExpStrat<-function(x, y=NULL, method="median", useRatio=F, retStrat=T, pc=0, ret
       #   y<-BinfTools:::rowGeoMean(y)
       # }
     }
-    res.dat<-cbind(res.dat, ifelse(y>threshold,"high","low"))
+    if(isTRUE(useQuartile)){
+      res.dat<-cbind(res.dat, BinfTools::quart_group(y))
+    } else {
+      res.dat<-cbind(res.dat, ifelse(y>threshold,"high","low"))
+    }
     colnames(res.dat)<-c(paste0(x.name,".expression"),paste0(x.name,".category"),
                          paste0(y.name,".expression"),paste0(y.name,".category"))
     if(isTRUE(retDat)){
@@ -162,7 +194,11 @@ ExpStrat<-function(x, y=NULL, method="median", useRatio=F, retStrat=T, pc=0, ret
     if(isFALSE(useRatio)){
       if(isTRUE(retStrat)){
         #message("set threshold")
-        y<-ifelse(y>threshold, "y.High","y.Low")
+        if(isTRUE(useQuartile)){
+          y<-paste("y",BinfTools::quart_group(y),sep=".")
+        } else {
+          y<-ifelse(y>threshold, "y.High","y.Low")
+        }
         return(paste(x,y,sep="_"))
       } else {
         return(data.frame(x=x, y=y))
@@ -183,7 +219,7 @@ ExpStrat<-function(x, y=NULL, method="median", useRatio=F, retStrat=T, pc=0, ret
 }
 
 optStrat<-function(x,y=NULL, data, time, event, type=c("rl","cph"),
-                   title="", useRatio=F, retPlot=F, timeLim=NULL, retDat=F, show.conf=T){
+                   title="", useRatio=F, retPlot=F, plotStrat=NULL, timeLim=NULL, retDat=F, show.conf=T, cols=NULL, timeUnit="Days"){
   dat<-data.frame(cbind(rowMedians(t(data[which(rownames(data) %in% x),])),time, event))
   if(!is.null(timeLim)){
     dat<-subset(dat, time<=timeLim)
@@ -221,7 +257,9 @@ optStrat<-function(x,y=NULL, data, time, event, type=c("rl","cph"),
       #print(head(res.cat))
     }
   }
-
+  if(!is.null(plotStrat)){
+    res.cat<-subset(res.cat, V1 %in% plotStrat)
+  }
   fit<-surv_fit(Surv(time, event)~V1, data=res.cat)
   p<-TRUE
   if(type[1]=="cph"){
@@ -240,11 +278,12 @@ optStrat<-function(x,y=NULL, data, time, event, type=c("rl","cph"),
     fit=fit,
     data=res.cat,
     risk.table = T,
-    xlab = "Days",
+    xlab = timeUnit,
     ylab="Probability",
     pval=p,
     conf.int=show.conf,
-    title=title
+    title=title,
+    palette=switch(is.null(cols)+1, BinfTools::colPal(cols)[c(1:2)], NULL)
   )
   if(isTRUE(retDat)){
     return(list(data=res.dat, fit=fit))
@@ -380,6 +419,26 @@ coxForest<-function(x,y=NULL, data, time, event, confounders=NULL, minConf=2,
   }
 }
 
+#Set up a function to export data for survival analyses:
+Export_optStrat<-function(x, data, time, event, timeLim=NULL, eventName=NULL){
+  dat<-data.frame(cbind(rowMedians(t(data[which(rownames(data) %in% x),])),time, event))
+  if(!is.null(timeLim)){
+    dat<-subset(dat, time<=timeLim)
+  }
+  #print(head(dat))
+  res.cut<-survminer::surv_cutpoint(dat, "time", "event", variables="V1")
+  res.cat<-surv_categorize(res.cut)
+  res.dat<-data.frame(row.names=rownames(res.cat), expression=dat$V1, category=res.cat$V1)
+  if(length(x)<2){
+    colnames(res.dat)<-c(paste0(x,".expression"), paste0(x,".category"))
+  }
+  #print(head(res.dat))
+  res.dat<-cbind(res.dat, res.cat[,c(1:2)])
+  if(!is.null(eventName)){
+    colnames(res.dat)[which(colnames(res.dat) %in% c("time","event"))]<-paste(eventName, c("time","outcome"), sep=".")
+  }
+  return(res.dat)
+}
 
 message("Ready!")
 
